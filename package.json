@@ -1,0 +1,19 @@
+{
+  "name": "kyc-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server for KYC document evaluation - connects Copilot Studio to Dataverse and Azure Document Intelligence",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node -r dotenv/config server.js",
+    "dev": "node -r dotenv/config --watch server.js"
+  },
+  "dependencies": {
+    "@azure/ai-form-recognizer": "^5.0.0",
+    "@azure/identity": "^4.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "zod": "^3.23.8"
+  }
+}

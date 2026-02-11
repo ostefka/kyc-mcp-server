@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../MCPOnPrem"
+		},
+		{
+			"path": "../../ADO"
+		}
+	],
+	"settings": {}
+}

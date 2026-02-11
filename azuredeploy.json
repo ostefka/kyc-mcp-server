@@ -1,0 +1,252 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.25.0"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources"
+      }
+    },
+    "uniqueSuffix": {
+      "type": "string",
+      "defaultValue": "[uniqueString(resourceGroup().id)]",
+      "metadata": {
+        "description": "Unique suffix for resource names"
+      }
+    },
+    "mcpApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "MCP API Key for authentication (generate a secure random string)"
+      }
+    },
+    "dataverseUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Dataverse URL (e.g., https://yourorg.crm.dynamics.com)"
+      }
+    },
+    "dataverseClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Dataverse App Registration Client ID"
+      }
+    },
+    "dataverseClientSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Dataverse App Registration Client Secret"
+      }
+    },
+    "tenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure AD Tenant ID"
+      }
+    },
+    "perplexityApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Perplexity API Key (optional, for adverse media screening)"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[format('acr{0}', parameters('uniqueSuffix'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": true
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[format('docint-{0}', parameters('uniqueSuffix'))]",
+      "location": "[parameters('location')]",
+      "kind": "FormRecognizer",
+      "sku": {
+        "name": "S0"
+      },
+      "properties": {
+        "customSubDomainName": "[format('docint-{0}', parameters('uniqueSuffix'))]",
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[format('log-{0}', parameters('uniqueSuffix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2023-05-01",
+      "name": "[format('cae-kyc-{0}', parameters('uniqueSuffix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', format('log-{0}', parameters('uniqueSuffix'))), '2022-10-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', format('log-{0}', parameters('uniqueSuffix'))), '2022-10-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-{0}', parameters('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2023-05-01",
+      "name": "kyc-mcp-server",
+      "location": "[parameters('location')]",
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', format('cae-kyc-{0}', parameters('uniqueSuffix')))]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "http",
+            "allowInsecure": false
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('uniqueSuffix'))), '2023-07-01').loginServer]",
+              "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('uniqueSuffix'))), '2023-07-01').username]",
+              "passwordSecretRef": "acr-password"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "acr-password",
+              "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('uniqueSuffix'))), '2023-07-01').passwords[0].value]"
+            },
+            {
+              "name": "mcp-api-key",
+              "value": "[parameters('mcpApiKey')]"
+            },
+            {
+              "name": "dataverse-client-secret",
+              "value": "[parameters('dataverseClientSecret')]"
+            },
+            {
+              "name": "doc-intelligence-key",
+              "value": "[listKeys(resourceId('Microsoft.CognitiveServices/accounts', format('docint-{0}', parameters('uniqueSuffix'))), '2023-10-01-preview').key1]"
+            },
+            {
+              "name": "perplexity-key",
+              "value": "[parameters('perplexityApiKey')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "kyc-mcp-server",
+              "image": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              },
+              "env": [
+                {
+                  "name": "PORT",
+                  "value": "8080"
+                },
+                {
+                  "name": "MCP_API_KEY",
+                  "secretRef": "mcp-api-key"
+                },
+                {
+                  "name": "DATAVERSE_URL",
+                  "value": "[parameters('dataverseUrl')]"
+                },
+                {
+                  "name": "DATAVERSE_CLIENT_ID",
+                  "value": "[parameters('dataverseClientId')]"
+                },
+                {
+                  "name": "DATAVERSE_CLIENT_SECRET",
+                  "secretRef": "dataverse-client-secret"
+                },
+                {
+                  "name": "DATAVERSE_TENANT_ID",
+                  "value": "[parameters('tenantId')]"
+                },
+                {
+                  "name": "DOC_INTELLIGENCE_ENDPOINT",
+                  "value": "[format('https://{0}', reference(resourceId('Microsoft.CognitiveServices/accounts', format('docint-{0}', parameters('uniqueSuffix'))), '2023-10-01-preview').endpoint)]"
+                },
+                {
+                  "name": "DOC_INTELLIGENCE_KEY",
+                  "secretRef": "doc-intelligence-key"
+                },
+                {
+                  "name": "PERPLEXITY_API_KEY",
+                  "secretRef": "perplexity-key"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('uniqueSuffix')))]",
+        "[resourceId('Microsoft.App/managedEnvironments', format('cae-kyc-{0}', parameters('uniqueSuffix')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('docint-{0}', parameters('uniqueSuffix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('acr{0}', parameters('uniqueSuffix'))), '2023-07-01').loginServer]"
+    },
+    "acrName": {
+      "type": "string",
+      "value": "[format('acr{0}', parameters('uniqueSuffix'))]"
+    },
+    "mcpServerUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'kyc-mcp-server'), '2023-05-01').configuration.ingress.fqdn)]"
+    },
+    "docIntelligenceEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('docint-{0}', parameters('uniqueSuffix'))), '2023-10-01-preview').endpoint]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "kyc-mcp-server"
+    },
+    "containerAppsEnvName": {
+      "type": "string",
+      "value": "[format('cae-kyc-{0}', parameters('uniqueSuffix'))]"
+    }
+  }
+}
